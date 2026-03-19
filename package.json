@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "preview": "electron-vite preview"
+    "preview": "electron-vite preview",
+    "dist": "electron-vite build && electron-builder --win dir"
   },
   "dependencies": {
     "@lydell/node-pty": "^1.2.0-beta.3",
@@ -18,7 +19,40 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.1",
+    "electron-builder": "^26.8.1",
     "electron-vite": "^2.3.0",
     "vite": "^5.4.11"
+  },
+  "build": {
+    "appId": "com.blocky.claude",
+    "productName": "Blocky",
+    "files": [
+      "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/@lydell/node-pty",
+        "to": "node_modules/@lydell/node-pty",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "node_modules/@lydell/node-pty-win32-x64",
+        "to": "node_modules/@lydell/node-pty-win32-x64",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": "dir",
+      "signAndEditExecutable": false
+    },
+    "forceCodeSigning": false,
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/@lydell/**"
+    ]
   }
 }
