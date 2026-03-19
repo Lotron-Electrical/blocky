@@ -1,183 +1,77 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import BlockyFace from "./components/BlockyFace";
 import Waveform from "./components/Waveform";
+import Terminal from "./components/Terminal";
+import ProjectPicker from "./components/ProjectPicker";
 import { DEFAULT_PARAMS, parseCommand } from "./blocky/command-parser";
-import { mapToolToActivity, getActivityDetail } from "./blocky/activity-mapper";
 
 export default function App() {
   const [p, setP] = useState({ ...DEFAULT_PARAMS });
   const [activity, setActivity] = useState("idle");
   const [detail, setDetail] = useState(null);
-  const [log, setLog] = useState([
-    {
-      r: "sys",
-      t: 'Talk to Blocky! Try "dance", "party mode", or ask Claude anything.',
-    },
-  ]);
+  const [phase, setPhase] = useState("picking"); // picking | running | exited
   const [input, setInput] = useState("");
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [projectDir, setProjectDir] = useState(null);
   const [sec, setSec] = useState(0);
-  const logRef = useRef();
   const inRef = useRef();
-  const streamTextRef = useRef("");
 
+  // Session timer
   useEffect(() => {
     const t = setInterval(() => setSec((s) => s + 1), 1000);
     return () => clearInterval(t);
   }, []);
 
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [log]);
-
-  // Listen for Claude stream events
+  // Listen for hook activity events
   useEffect(() => {
     if (!window.blockyAPI) return;
-    const unsub = window.blockyAPI.onStreamEvent((evt) => {
-      switch (evt.type) {
-        case "init":
-          setActivity("thinking");
-          setDetail(null);
-          break;
+    const unsub = window.blockyAPI.onHookActivity(
+      ({ activity: act, detail: det }) => {
+        setActivity(act);
+        setDetail(det);
+      },
+    );
+    return unsub;
+  }, []);
 
-        case "text":
-          setActivity("speaking");
-          setDetail(null);
-          streamTextRef.current += evt.content;
-          setLog((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.r === "blocky" && last.streaming) {
-              return [
-                ...prev.slice(0, -1),
-                { r: "blocky", t: streamTextRef.current, streaming: true },
-              ];
-            }
-            return [
-              ...prev,
-              { r: "blocky", t: streamTextRef.current, streaming: true },
-            ];
-          });
-          break;
-
-        case "tool_start": {
-          const act = mapToolToActivity(evt.tool);
-          const det = getActivityDetail(evt.tool, evt.input);
-          setActivity(act);
-          setDetail(det);
-          setLog((prev) => [
-            ...prev,
-            { r: "tool", t: `${evt.tool}${det ? ": " + det : ""}` },
-          ]);
-          break;
-        }
-
-        case "tool_end":
-          if (evt.isError) {
-            setActivity("error");
-            setDetail("tool failed");
-            setTimeout(() => setActivity("thinking"), 1200);
-          } else {
-            setActivity("thinking");
-            setDetail(null);
-          }
-          break;
-
-        case "done":
-          // Finalize any streaming text
-          if (streamTextRef.current) {
-            const finalText = streamTextRef.current;
-            setLog((prev) => {
-              const last = prev[prev.length - 1];
-              if (last && last.r === "blocky" && last.streaming) {
-                return [...prev.slice(0, -1), { r: "blocky", t: finalText }];
-              }
-              return prev;
-            });
-            streamTextRef.current = "";
-          }
-
-          if (evt.isError) {
-            setActivity("error");
-            setDetail(typeof evt.result === "string" ? evt.result : "error");
-            setLog((prev) => [
-              ...prev,
-              {
-                r: "sys",
-                t: `Error: ${typeof evt.result === "string" ? evt.result : "Something went wrong"}`,
-              },
-            ]);
-          } else {
-            setActivity("success");
-            setDetail(evt.cost ? `$${evt.cost.toFixed(4)}` : null);
-          }
-          setIsProcessing(false);
-          setTimeout(() => {
-            setActivity("idle");
-            setDetail(null);
-          }, 2000);
-          break;
-      }
+  // Listen for PTY exit
+  useEffect(() => {
+    if (!window.blockyAPI) return;
+    const unsub = window.blockyAPI.onPtyExit(() => {
+      setPhase("exited");
+      setActivity("idle");
+      setDetail(null);
     });
     return unsub;
   }, []);
 
+  const handleSelectProject = useCallback((dir) => {
+    if (!window.blockyAPI) return;
+    window.blockyAPI.startPty(dir);
+    setPhase("running");
+    setActivity("idle");
+    setSec(0);
+  }, []);
+
+  const handleRestart = useCallback(() => {
+    setPhase("picking");
+    setActivity("idle");
+    setDetail(null);
+    setSec(0);
+  }, []);
+
+  // Blocky command bar — avatar commands only
   const exec = useCallback((text) => {
     const t = text.trim();
     if (!t) return;
-
-    setLog((prev) => [...prev, { r: "you", t }]);
-
-    // Try command parser first (instant, local)
     const { c, u } = parseCommand(t);
     if (Object.keys(c).length > 0) {
       setP((prev) => ({ ...prev, ...c }));
-      setLog((prev) => [...prev, { r: "blocky", t: u.join(", ") }]);
-      return;
     }
-
-    // Otherwise send to Claude
-    if (!window.blockyAPI) {
-      setLog((prev) => [
-        ...prev,
-        {
-          r: "sys",
-          t: "Claude bridge not available (running outside Electron?)",
-        },
-      ]);
-      return;
-    }
-
-    setIsProcessing(true);
-    setActivity("thinking");
-    setDetail(null);
-    streamTextRef.current = "";
-    window.blockyAPI.sendMessage(t);
   }, []);
 
   const submit = () => {
-    if (isProcessing) return;
     exec(input);
     setInput("");
     setTimeout(() => inRef.current?.focus(), 30);
-  };
-
-  const handleSelectDir = async () => {
-    if (!window.blockyAPI) return;
-    const dir = await window.blockyAPI.selectDirectory();
-    if (dir) {
-      setProjectDir(dir);
-      setLog((prev) => [...prev, { r: "sys", t: `Project: ${dir}` }]);
-    }
-  };
-
-  const handleInterrupt = () => {
-    if (!window.blockyAPI) return;
-    window.blockyAPI.interrupt();
-    setIsProcessing(false);
-    setActivity("idle");
-    setDetail(null);
-    setLog((prev) => [...prev, { r: "sys", t: "Interrupted." }]);
   };
 
   const fmt = (s) =>
@@ -190,11 +84,6 @@ export default function App() {
     "love",
     "hacker",
     "robot mode",
-    "crown",
-    "heart eyes",
-    "spin",
-    "make me blue",
-    "excited",
     "reset",
   ];
 
@@ -242,270 +131,225 @@ export default function App() {
           </span>
           <span style={{ color: "#12251c" }}>│</span>
           <span style={{ color: "#2a4a3a", fontSize: 9, letterSpacing: 2 }}>
-            OPEN SOURCE
+            CLAUDE CODE
           </span>
         </div>
-        <div
+        <span
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
+            color: "#2a4a3a",
+            fontSize: 10,
+            letterSpacing: 2,
+            fontVariantNumeric: "tabular-nums",
             WebkitAppRegion: "no-drag",
           }}
         >
-          <button
-            onClick={handleSelectDir}
-            title="Select project directory"
-            style={{
-              padding: "2px 8px",
-              borderRadius: 3,
-              border: "1px solid #12251c",
-              background: "none",
-              color: "#2a4a3a",
-              cursor: "pointer",
-              fontFamily: "'JetBrains Mono',monospace",
-              fontSize: 10,
-              letterSpacing: 1,
-            }}
-          >
-            {projectDir ? "📁 " + projectDir.split(/[\\/]/).pop() : "📁 Open"}
-          </button>
-          <span
-            style={{
-              color: "#2a4a3a",
-              fontSize: 10,
-              letterSpacing: 2,
-              fontVariantNumeric: "tabular-nums",
-            }}
-          >
-            {fmt(sec)}
-          </span>
-        </div>
+          {fmt(sec)}
+        </span>
       </div>
 
-      {/* ─── MAIN ─── */}
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
-      >
-        {/* BLOCKY AREA */}
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "20px 16px 10px",
-            borderBottom: "1px solid #12251c",
-            background: `radial-gradient(ellipse at 50% 40%, ${p.skinColor}08 0%, transparent 60%), radial-gradient(ellipse at center, #0c1612 0%, #080c0a 70%)`,
-            transition: "background 0.5s",
-          }}
-        >
-          <BlockyFace params={p} activity={activity} detail={detail} />
-          <div style={{ marginTop: 10 }}>
-            <Waveform active={activity === "speaking"} color={p.skinColor} />
+      {/* ─── MAIN CONTENT ─── */}
+      {phase === "picking" && (
+        <>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              padding: "20px 16px 10px",
+              borderBottom: "1px solid #12251c",
+              background: `radial-gradient(ellipse at 50% 40%, ${p.skinColor}08 0%, transparent 60%), radial-gradient(ellipse at center, #0c1612 0%, #080c0a 70%)`,
+            }}
+          >
+            <BlockyFace params={p} activity={activity} detail={detail} />
+            <div style={{ marginTop: 10 }}>
+              <Waveform active={false} color={p.skinColor} />
+            </div>
           </div>
-        </div>
+          <ProjectPicker onSelect={handleSelectProject} />
+        </>
+      )}
 
-        {/* TRANSCRIPT */}
-        <div
-          ref={logRef}
-          style={{
-            flex: 1,
-            overflow: "auto",
-            padding: "10px 14px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 7,
-          }}
-        >
-          {log.map((m, i) =>
-            m.r === "tool" ? (
-              <div key={i} className="tool-line">
-                ▸ {m.t}
-              </div>
-            ) : (
-              <div
-                key={i}
-                className="transcript-msg"
-                style={{ display: "flex", gap: 8, alignItems: "flex-start" }}
-              >
-                <div
-                  style={{
-                    fontSize: 9,
-                    minWidth: 44,
-                    textAlign: "right",
-                    paddingTop: 2,
-                    letterSpacing: 1,
-                    fontWeight: 600,
-                    color:
-                      m.r === "you"
-                        ? "#5588ff"
-                        : m.r === "blocky"
-                          ? p.skinColor
-                          : "#2a4a3a",
-                  }}
-                >
-                  {m.r === "you" ? "YOU" : m.r === "blocky" ? p.name : "SYS"}
-                </div>
-                <div
-                  style={{
-                    fontSize: 11.5,
-                    lineHeight: 1.5,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    color:
-                      m.r === "you"
-                        ? "#7799bb"
-                        : m.r === "blocky"
-                          ? "#90b8a4"
-                          : "#2a4a3a",
-                    borderLeft: `2px solid ${m.r === "you" ? "#15203a" : m.r === "blocky" ? "#15302a" : "#101a14"}`,
-                    paddingLeft: 9,
-                  }}
-                >
-                  {m.t}
-                </div>
-              </div>
-            ),
-          )}
-        </div>
-      </div>
+      {phase === "running" && (
+        <>
+          {/* Compact avatar */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              padding: "6px 16px",
+              borderBottom: "1px solid #12251c",
+              background: `radial-gradient(ellipse at 50% 50%, ${p.skinColor}06 0%, transparent 60%), #0a100e`,
+              gap: 12,
+            }}
+          >
+            <BlockyFace
+              params={p}
+              activity={activity}
+              detail={detail}
+              compact
+            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Waveform
+                active={activity === "speaking" || activity === "thinking"}
+                color={p.skinColor}
+                n={16}
+              />
+            </div>
+          </div>
 
-      {/* ─── BOTTOM ─── */}
-      <div
-        style={{
-          borderTop: "1px solid #12251c",
-          background: "#0a100e",
-          padding: "10px 14px 6px",
-        }}
-      >
-        {/* Input */}
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            alignItems: "center",
-            marginBottom: 8,
-          }}
-        >
+          {/* Terminal */}
           <div
             style={{
               flex: 1,
               display: "flex",
-              alignItems: "center",
-              border: `1px solid ${p.skinColor}22`,
-              borderRadius: 6,
-              background: "#080c0a",
-              padding: "0 10px",
-              transition: "border-color 0.3s",
+              overflow: "hidden",
             }}
           >
-            <span style={{ color: "#1e3a2a", fontSize: 12, marginRight: 6 }}>
-              ›
-            </span>
-            <input
-              ref={inRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
-              placeholder={
-                isProcessing
-                  ? "thinking..."
-                  : `talk to ${p.name.toLowerCase()}...`
-              }
-              disabled={isProcessing}
-              style={{
-                flex: 1,
-                background: "none",
-                border: "none",
-                outline: "none",
-                color: "#c0c8c4",
-                fontFamily: "'JetBrains Mono',monospace",
-                fontSize: 11.5,
-                padding: "9px 0",
-                opacity: isProcessing ? 0.4 : 1,
-              }}
-            />
+            <Terminal />
           </div>
-          {isProcessing ? (
-            <button
-              onClick={handleInterrupt}
-              style={{
-                padding: "9px 14px",
-                borderRadius: 6,
-                border: "1px solid #ff444433",
-                background: "#ff44440d",
-                color: "#ff4444",
-                cursor: "pointer",
-                fontFamily: "'JetBrains Mono',monospace",
-                fontSize: 10,
-                fontWeight: 600,
-                letterSpacing: 2,
-                transition: "all 0.2s",
-              }}
-            >
-              STOP
-            </button>
-          ) : (
-            <button
-              onClick={submit}
-              style={{
-                padding: "9px 14px",
-                borderRadius: 6,
-                border: `1px solid ${p.skinColor}33`,
-                background: `${p.skinColor}0d`,
-                color: p.skinColor,
-                cursor: "pointer",
-                fontFamily: "'JetBrains Mono',monospace",
-                fontSize: 10,
-                fontWeight: 600,
-                letterSpacing: 2,
-                transition: "all 0.2s",
-              }}
-            >
-              SEND
-            </button>
-          )}
-        </div>
 
-        {/* Quick buttons */}
+          {/* Command bar (avatar commands only) */}
+          <div
+            style={{
+              borderTop: "1px solid #12251c",
+              background: "#0a100e",
+              padding: "8px 14px 6px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                marginBottom: 6,
+              }}
+            >
+              <div
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  border: `1px solid ${p.skinColor}22`,
+                  borderRadius: 6,
+                  background: "#080c0a",
+                  padding: "0 10px",
+                }}
+              >
+                <span
+                  style={{ color: "#1e3a2a", fontSize: 12, marginRight: 6 }}
+                >
+                  {"›"}
+                </span>
+                <input
+                  ref={inRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submit()}
+                  placeholder="blocky command (dance, party, reset...)"
+                  style={{
+                    flex: 1,
+                    background: "none",
+                    border: "none",
+                    outline: "none",
+                    color: "#c0c8c4",
+                    fontFamily: "'JetBrains Mono',monospace",
+                    fontSize: 10,
+                    padding: "7px 0",
+                  }}
+                />
+              </div>
+              <button
+                onClick={submit}
+                style={{
+                  padding: "7px 12px",
+                  borderRadius: 6,
+                  border: `1px solid ${p.skinColor}33`,
+                  background: `${p.skinColor}0d`,
+                  color: p.skinColor,
+                  cursor: "pointer",
+                  fontFamily: "'JetBrains Mono',monospace",
+                  fontSize: 9,
+                  fontWeight: 600,
+                  letterSpacing: 2,
+                }}
+              >
+                CMD
+              </button>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                gap: 4,
+                flexWrap: "wrap",
+                justifyContent: "center",
+                paddingBottom: 4,
+              }}
+            >
+              {quickCmds.map((cmd) => (
+                <button
+                  key={cmd}
+                  onClick={() => exec(cmd)}
+                  style={{
+                    padding: "2px 7px",
+                    borderRadius: 3,
+                    border: "1px solid #12251c",
+                    background: "#0a100e",
+                    color: "#2a5a3a",
+                    cursor: "pointer",
+                    fontFamily: "'JetBrains Mono',monospace",
+                    fontSize: 8,
+                    letterSpacing: 0.5,
+                  }}
+                >
+                  {cmd}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {phase === "exited" && (
         <div
           style={{
+            flex: 1,
             display: "flex",
-            gap: 4,
-            flexWrap: "wrap",
+            flexDirection: "column",
+            alignItems: "center",
             justifyContent: "center",
-            paddingBottom: 6,
+            gap: 20,
           }}
         >
-          {quickCmds.map((cmd) => (
-            <button
-              key={cmd}
-              onClick={() => !isProcessing && exec(cmd)}
-              style={{
-                padding: "3px 8px",
-                borderRadius: 3,
-                border: "1px solid #12251c",
-                background: "#0a100e",
-                color: "#2a5a3a",
-                cursor: isProcessing ? "default" : "pointer",
-                fontFamily: "'JetBrains Mono',monospace",
-                fontSize: 8.5,
-                letterSpacing: 0.5,
-                transition: "all 0.15s",
-                opacity: isProcessing ? 0.4 : 1,
-              }}
-            >
-              {cmd}
-            </button>
-          ))}
+          <BlockyFace params={p} activity="idle" detail={null} />
+          <div
+            style={{
+              fontSize: 11,
+              letterSpacing: 3,
+              color: "#2a4a3a",
+              fontWeight: 600,
+            }}
+          >
+            SESSION ENDED
+          </div>
+          <button
+            onClick={handleRestart}
+            style={{
+              padding: "10px 24px",
+              borderRadius: 6,
+              border: "1px solid #00ff8833",
+              background: "#00ff880d",
+              color: "#00ff88",
+              cursor: "pointer",
+              fontFamily: "'JetBrains Mono',monospace",
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: 2,
+            }}
+          >
+            NEW SESSION
+          </button>
         </div>
-      </div>
+      )}
     </div>
   );
 }

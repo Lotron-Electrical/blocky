@@ -1,17 +1,22 @@
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import { join } from "path";
-import { spawn } from "child_process";
+import { readFileSync, existsSync } from "fs";
+import {
+  spawnClaude,
+  write as ptyWrite,
+  resize as ptyResize,
+  kill as ptyKill,
+} from "./pty-manager";
+import { start as hookStart, stop as hookStop } from "./hook-server";
+import { inject as hookInject, remove as hookRemove } from "./hook-injector";
 
 let win = null;
-let sessionId = null;
-let currentProc = null;
-let projectDir = null;
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 480,
-    height: 800,
-    minWidth: 400,
+    width: 700,
+    height: 900,
+    minWidth: 500,
     minHeight: 600,
     titleBarStyle: "hidden",
     titleBarOverlay: {
@@ -27,7 +32,6 @@ function createWindow() {
     },
   });
 
-  // Load renderer
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
@@ -35,158 +39,22 @@ function createWindow() {
   }
 }
 
-// ── NDJSON line-buffer parser ──
-function parseNDJSON(stream, onLine) {
-  let buffer = "";
-  stream.on("data", (chunk) => {
-    buffer += chunk.toString();
-    const lines = buffer.split("\n");
-    buffer = lines.pop(); // keep incomplete line
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        onLine(JSON.parse(trimmed));
-      } catch {
-        // skip non-JSON lines
-      }
-    }
-  });
-}
-
-// ── Map stream-json events to renderer events ──
-function mapEvent(evt) {
-  if (!evt || !evt.type) return null;
-
-  // init event
-  if (evt.type === "system" && evt.subtype === "init") {
-    sessionId = evt.session_id;
-    return { type: "init", sessionId: evt.session_id };
-  }
-
-  // assistant message with content blocks
-  if (evt.type === "assistant" && evt.message?.content) {
-    const events = [];
-    for (const block of evt.message.content) {
-      if (block.type === "text") {
-        events.push({ type: "text", content: block.text });
-      } else if (block.type === "tool_use") {
-        events.push({
-          type: "tool_start",
-          tool: block.name,
-          toolUseId: block.id,
-          input: block.input,
-        });
-      }
-    }
-    return events.length === 1 ? events[0] : events.length > 1 ? events : null;
-  }
-
-  // user message with tool_result
-  if (evt.type === "user" && evt.message?.content) {
-    const events = [];
-    for (const block of evt.message.content) {
-      if (block.type === "tool_result") {
-        events.push({
-          type: "tool_end",
-          toolUseId: block.tool_use_id,
-          output: block.content || "",
-          isError: block.is_error || false,
-        });
-      }
-    }
-    return events.length === 1 ? events[0] : events.length > 1 ? events : null;
-  }
-
-  // result event
-  if (evt.type === "result") {
-    return {
-      type: "done",
-      result: evt.result,
-      isError: evt.subtype === "error",
-      cost: evt.cost_usd || null,
-    };
-  }
-
-  return null;
-}
-
-function sendToRenderer(event) {
-  if (!win || win.isDestroyed()) return;
-  if (Array.isArray(event)) {
-    for (const e of event) {
-      win.webContents.send("claude:event", e);
-    }
-  } else {
-    win.webContents.send("claude:event", event);
-  }
-}
-
 // ── IPC Handlers ──
 
-ipcMain.on("claude:send", (_event, message) => {
-  if (currentProc) {
-    currentProc.kill();
-    currentProc = null;
-  }
-
-  const args = ["-p", "--output-format", "stream-json", "--verbose"];
-  if (sessionId) {
-    args.push("--resume", sessionId);
-  }
-  args.push(message);
-
-  const proc = spawn("claude", args, {
-    shell: true,
-    cwd: projectDir || undefined,
-    env: { ...process.env },
-  });
-
-  currentProc = proc;
-
-  parseNDJSON(proc.stdout, (evt) => {
-    const mapped = mapEvent(evt);
-    if (mapped) sendToRenderer(mapped);
-  });
-
-  // Capture stderr for debugging
-  let stderrBuf = "";
-  proc.stderr.on("data", (chunk) => {
-    stderrBuf += chunk.toString();
-  });
-
-  proc.on("close", (code) => {
-    if (currentProc === proc) currentProc = null;
-    if (code !== 0 && stderrBuf) {
-      sendToRenderer({
-        type: "done",
-        result: stderrBuf.trim(),
-        isError: true,
-        cost: null,
-      });
-    }
-  });
-
-  proc.on("error", (err) => {
-    if (currentProc === proc) currentProc = null;
-    sendToRenderer({
-      type: "done",
-      result: `Failed to start Claude: ${err.message}`,
-      isError: true,
-      cost: null,
-    });
-  });
+ipcMain.on("pty:start", (_event, projectDir) => {
+  spawnClaude(projectDir, win);
 });
 
-ipcMain.on("claude:interrupt", () => {
-  if (currentProc) {
-    currentProc.kill();
-    currentProc = null;
-  }
+ipcMain.on("pty:input", (_event, data) => {
+  ptyWrite(data);
 });
 
-ipcMain.on("claude:setProjectDir", (_event, path) => {
-  projectDir = path;
+ipcMain.on("pty:resize", (_event, { cols, rows }) => {
+  ptyResize(cols, rows);
+});
+
+ipcMain.on("pty:kill", () => {
+  ptyKill();
 });
 
 ipcMain.handle("dialog:selectDirectory", async () => {
@@ -194,17 +62,44 @@ ipcMain.handle("dialog:selectDirectory", async () => {
     properties: ["openDirectory"],
   });
   if (!result.canceled && result.filePaths.length > 0) {
-    projectDir = result.filePaths[0];
     return result.filePaths[0];
   }
   return null;
 });
 
+ipcMain.handle("getRecentProjects", async () => {
+  const claudeJson = join(
+    process.env.USERPROFILE || process.env.HOME,
+    ".claude.json",
+  );
+  try {
+    const data = JSON.parse(readFileSync(claudeJson, "utf8"));
+    const projects = new Set();
+    if (data.projects) {
+      for (const dir of Object.keys(data.projects)) {
+        if (existsSync(dir)) projects.add(dir);
+      }
+    }
+    return [...projects].slice(0, 10);
+  } catch {
+    return [];
+  }
+});
+
 // ── App lifecycle ──
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  hookStart(win);
+  hookInject();
+});
+
+app.on("before-quit", () => {
+  ptyKill();
+  hookRemove();
+  hookStop();
+});
 
 app.on("window-all-closed", () => {
-  if (currentProc) currentProc.kill();
   app.quit();
 });

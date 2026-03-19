@@ -136,7 +136,7 @@ const ALAB = {
   searching: "SEARCHING",
 };
 
-export default function BlockyFace({ params, activity, detail }) {
+export default function BlockyFace({ params, activity, detail, compact }) {
   const offset = useAnimation(params.animation, params.animSpeed);
   const [blink, setBlink] = useState(false);
   const [speakF, setSpeakF] = useState(0);
@@ -219,6 +219,82 @@ export default function BlockyFace({ params, activity, detail }) {
     extra ? `  ║${pad(extra, W)}║  ` : `  ║${" ".repeat(W)}║  `,
     `  ╚${"═".repeat(W)}╝  `,
   ];
+
+  if (compact) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          transform: `translate(${offset.x * 0.3}px,${offset.y * 0.3}px) rotate(${offset.r * 0.3}deg) scale(${offset.s})`,
+          transition:
+            params.animation === "vibrate"
+              ? "none"
+              : "transform 0.06s ease-out",
+        }}
+      >
+        <pre
+          style={{
+            fontFamily: "'JetBrains Mono','Fira Code',monospace",
+            fontSize: 8,
+            lineHeight: 1.2,
+            margin: 0,
+            textAlign: "center",
+            userSelect: "none",
+            color: faceColor,
+            textShadow: `0 0 6px ${faceColor}44`,
+            transition: "color 0.35s",
+          }}
+        >
+          {lines.join("\n")}
+        </pre>
+        <div style={{ fontFamily: "'JetBrains Mono',monospace" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 9,
+              fontWeight: 600,
+              letterSpacing: 2,
+              color: ac,
+            }}
+          >
+            <span
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: "50%",
+                background: ac,
+                display: "inline-block",
+                boxShadow: `0 0 4px ${ac}`,
+                animation:
+                  activity !== "idle" ? "pulse 1s ease infinite" : "none",
+              }}
+            />
+            {ALAB[activity] || "STANDING BY"}
+          </div>
+          {detail && (
+            <div
+              style={{
+                fontSize: 8,
+                color: "#4a6a5a",
+                letterSpacing: 0.5,
+                marginTop: 2,
+                maxWidth: 200,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {detail}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
