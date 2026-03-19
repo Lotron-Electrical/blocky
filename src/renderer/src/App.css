@@ -93,6 +93,20 @@ button:active {
   font-family: "JetBrains Mono", monospace;
 }
 
+/* Mic active pulse */
+.mic-active {
+  animation: micPulse 1s ease-in-out infinite;
+}
+@keyframes micPulse {
+  0%, 100% { box-shadow: 0 0 4px #ff444433; }
+  50% { box-shadow: 0 0 12px #ff444466; }
+}
+
+/* View toggle */
+.view-toggle-btn:hover {
+  filter: brightness(1.2) !important;
+}
+
 /* Terminal container overrides */
 .xterm {
   padding: 0;

@@ -12,7 +12,7 @@ function mapHookToActivity(body) {
 
   switch (event) {
     case "UserPromptSubmit":
-      return { activity: "thinking", detail: null };
+      return { activity: "thinking", detail: null, userPrompt: body.prompt || null };
 
     case "PreToolUse": {
       const toolMap = {
@@ -39,7 +39,7 @@ function mapHookToActivity(body) {
             ? input.command.slice(0, 47) + "..."
             : input.command;
       else if (input.pattern) detail = input.pattern;
-      return { activity: act, detail };
+      return { activity: act, detail, toolName: tool };
     }
 
     case "PostToolUse":
@@ -47,7 +47,7 @@ function mapHookToActivity(body) {
       return { activity: "thinking", detail: null };
 
     case "Stop":
-      return { activity: "success", detail: null };
+      return { activity: "success", detail: null, lastMessage: body.last_assistant_message || null };
 
     default:
       return null;
