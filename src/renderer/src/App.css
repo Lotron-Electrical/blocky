@@ -98,8 +98,13 @@ button:active {
   animation: micPulse 1s ease-in-out infinite;
 }
 @keyframes micPulse {
-  0%, 100% { box-shadow: 0 0 4px #ff444433; }
-  50% { box-shadow: 0 0 12px #ff444466; }
+  0%,
+  100% {
+    box-shadow: 0 0 4px #ff444433;
+  }
+  50% {
+    box-shadow: 0 0 12px #ff444466;
+  }
 }
 
 /* View toggle */

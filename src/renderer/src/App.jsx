@@ -27,24 +27,21 @@ export default function App() {
 
   // STT — voice input
   const stt = useSpeechRecognition({
-    onResult: useCallback(
-      (text) => {
-        const t = text.trim();
-        if (!t) return;
+    onResult: useCallback((text) => {
+      const t = text.trim();
+      if (!t) return;
 
-        // Try Blocky command first
-        const { c, u } = parseCommand(t);
-        if (Object.keys(c).length > 0) {
-          setP((prev) => ({ ...prev, ...c }));
-          return;
-        }
+      // Try Blocky command first
+      const { c, u } = parseCommand(t);
+      if (Object.keys(c).length > 0) {
+        setP((prev) => ({ ...prev, ...c }));
+        return;
+      }
 
-        // Otherwise send to Claude Code via PTY
-        setTranscript((prev) => [...prev, { type: "user", text: t }]);
-        window.blockyAPI?.sendPtyInput(t + "\r");
-      },
-      [],
-    ),
+      // Otherwise send to Claude Code via PTY
+      setTranscript((prev) => [...prev, { type: "user", text: t }]);
+      window.blockyAPI?.sendPtyInput(t + "\r");
+    }, []),
   });
 
   // Session timer
