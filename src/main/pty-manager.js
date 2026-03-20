@@ -26,25 +26,17 @@ export function spawnShell(projectDir, browserWindow) {
   const shellArgs = isGitBash ? ["-l"] : [];
   const cwd = projectDir || process.env.USERPROFILE || process.env.HOME;
 
-  try {
-    ptyProcess = pty.spawn(shell, shellArgs, {
-      name: "xterm-256color",
-      cols: 80,
-      rows: 24,
-      cwd,
-      env: {
-        ...process.env,
-        TERM: "xterm-256color",
-        BLOCKY_SESSION: "1",
-      },
-    });
-  } catch (err) {
-    console.error(`[pty-manager] spawn failed: ${err.message}`);
-    if (win && !win.isDestroyed()) {
-      win.webContents.send("pty:exit", 1);
-    }
-    return;
-  }
+  ptyProcess = pty.spawn(shell, shellArgs, {
+    name: "xterm-256color",
+    cols: 80,
+    rows: 24,
+    cwd,
+    env: {
+      ...process.env,
+      TERM: "xterm-256color",
+      BLOCKY_SESSION: "1",
+    },
+  });
 
   ptyProcess.onData((data) => {
     if (win && !win.isDestroyed()) {
@@ -67,7 +59,7 @@ export function write(data) {
 }
 
 export function resize(cols, rows) {
-  if (ptyProcess) ptyProcess.resize(cols, rows);
+  if (ptyProcess && cols > 0 && rows > 0) ptyProcess.resize(cols, rows);
 }
 
 export function kill() {

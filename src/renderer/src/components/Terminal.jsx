@@ -65,7 +65,7 @@ export default function Terminal({ onReady }) {
       try {
         fit.fit();
         const dims = fit.proposeDimensions();
-        if (dims) {
+        if (dims && dims.cols > 0 && dims.rows > 0) {
           window.blockyAPI.resizePty(dims.cols, dims.rows);
         }
       } catch {
