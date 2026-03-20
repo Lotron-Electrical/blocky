@@ -136,7 +136,13 @@ const ALAB = {
   searching: "SEARCHING",
 };
 
-export default function BlockyFace({ params, activity, detail, compact }) {
+export default function BlockyFace({
+  params,
+  activity,
+  detail,
+  compact,
+  amplitude,
+}) {
   const offset = useAnimation(params.animation, params.animSpeed);
   const [blink, setBlink] = useState(false);
   const [speakF, setSpeakF] = useState(0);
@@ -193,8 +199,18 @@ export default function BlockyFace({ params, activity, detail, compact }) {
     extra = " ?";
   }
   if (activity === "speaking") {
-    const ms = [MOUTH.speak1, MOUTH.speak2, MOUTH.speak3];
-    mouth = ms[speakF];
+    if (amplitude !== undefined && amplitude !== null) {
+      // Amplitude-driven mouth (Piper TTS)
+      if (amplitude < 0.1)
+        mouth = MOUTH.speak3; // small mouth
+      else if (amplitude < 0.4)
+        mouth = MOUTH.speak1; // medium
+      else mouth = MOUTH.speak2; // wide open
+    } else {
+      // Fixed cycle fallback (Web Speech API)
+      const ms = [MOUTH.speak1, MOUTH.speak2, MOUTH.speak3];
+      mouth = ms[speakF];
+    }
   }
 
   const acc = ACCESSORY_ART[params.accessory] || [];

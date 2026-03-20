@@ -112,6 +112,32 @@ button:active {
   filter: brightness(1.2) !important;
 }
 
+/* Companion animations */
+@keyframes companionEnter {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes companionFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+/* Push-to-talk indicator */
+.ptt-indicator {
+  animation: micPulse 0.8s ease-in-out infinite;
+}
+
 /* Terminal container overrides */
 .xterm {
   padding: 0;

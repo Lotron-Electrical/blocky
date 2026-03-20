@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import IdleScene from "./IdleScene";
 
 function renderContent(text) {
   // Split on code blocks, render them in <pre> blocks
@@ -39,14 +40,55 @@ const TOOL_LABELS = {
   thinking: "THINKING",
 };
 
-export default function Transcript({ entries }) {
+export default function Transcript({
+  entries,
+  activity,
+  detail,
+  skinColor,
+  peers,
+  claudeReady,
+}) {
   const bottomRef = useRef(null);
+  const [showIdle, setShowIdle] = useState(false);
+  const idleTimerRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [entries.length]);
+  }, [entries.length, activity, detail]);
+
+  // Debounced idle activation: 3s after going idle, instant deactivation
+  useEffect(() => {
+    if (activity === "idle" && peers && peers.length > 0) {
+      idleTimerRef.current = setTimeout(() => setShowIdle(true), 3000);
+    } else {
+      setShowIdle(false);
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
+      }
+    }
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+  }, [activity, peers]);
+
+  const hasPeers = peers && peers.length > 0;
 
   if (entries.length === 0) {
+    if (hasPeers && showIdle) {
+      return (
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
+          <IdleScene peers={peers} compact={false} />
+        </div>
+      );
+    }
     return (
       <div
         style={{
@@ -60,7 +102,7 @@ export default function Transcript({ entries }) {
           fontFamily: "'JetBrains Mono', monospace",
         }}
       >
-        WAITING FOR INPUT...
+        {claudeReady ? "WAITING FOR INPUT..." : "STARTING CLAUDE CODE..."}
       </div>
     );
   }
@@ -77,6 +119,24 @@ export default function Transcript({ entries }) {
       }}
     >
       {entries.map((entry, i) => {
+        if (entry.type === "blocky_verbal") {
+          return (
+            <div
+              key={i}
+              style={{
+                fontSize: 9,
+                fontStyle: "italic",
+                color: "#3a8a5a",
+                paddingLeft: 53,
+                padding: "2px 0 2px 53px",
+                fontFamily: "'JetBrains Mono', monospace",
+              }}
+            >
+              {entry.text}
+            </div>
+          );
+        }
+
         if (entry.type === "tool") {
           const label = TOOL_LABELS[entry.activity] || "WORKING";
           return (
@@ -115,7 +175,7 @@ export default function Transcript({ entries }) {
                   fontFamily: "'JetBrains Mono', monospace",
                 }}
               >
-                {isUser ? "YOU" : "BLOCKY"}
+                {isUser ? "YOU" : "CLAUDE"}
               </span>
             </div>
             <div
@@ -134,6 +194,31 @@ export default function Transcript({ entries }) {
           </div>
         );
       })}
+      {/* Live status indicator — updates in place as Claude works */}
+      {activity &&
+        activity !== "idle" &&
+        activity !== "speaking" &&
+        activity !== "success" && (
+          <div
+            style={{
+              fontSize: 9,
+              fontFamily: "'JetBrains Mono', monospace",
+              color: "#2a5a3a",
+              letterSpacing: 1.5,
+              padding: "4px 0 2px 0",
+              opacity: 0.8,
+            }}
+          >
+            {"› "}
+            {TOOL_LABELS[activity] || activity.toUpperCase()}
+            {detail ? ` · ${detail}` : ""}
+          </div>
+        )}
+      {hasPeers && showIdle && (
+        <div style={{ borderTop: "1px solid #12251c", marginTop: 4 }}>
+          <IdleScene peers={peers} compact={true} />
+        </div>
+      )}
       <div ref={bottomRef} />
     </div>
   );

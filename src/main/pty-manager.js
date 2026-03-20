@@ -33,6 +33,7 @@ export function spawnClaude(projectDir, browserWindow) {
     env: {
       ...process.env,
       TERM: "xterm-256color",
+      BLOCKY_SESSION: "1",
     },
   });
 

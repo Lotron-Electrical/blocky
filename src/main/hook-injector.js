@@ -11,6 +11,7 @@ const MARKER = "BLOCKY_HOOK_v1";
 const BRIDGE_PATH = join(BLOCKY_DIR, "hook-bridge.js").replace(/\\/g, "/");
 
 const BRIDGE_SOURCE = `#!/usr/bin/env node
+if (!process.env.BLOCKY_SESSION) process.exit(0);
 const fs = require("fs");
 const path = require("path");
 const http = require("http");

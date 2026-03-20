@@ -4,9 +4,31 @@ import Waveform from "./components/Waveform";
 import Terminal from "./components/Terminal";
 import Transcript from "./components/Transcript";
 import ProjectPicker from "./components/ProjectPicker";
+import SetupWizard from "./components/SetupWizard";
+import ErrorBanner from "./components/ErrorBanner";
+import AudioDevicePicker from "./components/AudioDevicePicker";
 import { DEFAULT_PARAMS, parseCommand } from "./blocky/command-parser";
 import useSpeechRecognition from "./hooks/useSpeechRecognition";
 import useSpeechSynthesis from "./hooks/useSpeechSynthesis";
+
+const ACK_PHRASES = [
+  "On it!",
+  "Let me look into that.",
+  "Sure, give me a sec.",
+  "Working on it!",
+  "Got it, one moment.",
+  "Okay, let me check.",
+];
+
+const PROGRESS_PHRASES = {
+  reading_file: (d) => `Reading ${d ? d.split("/").pop() : "a file"}.`,
+  writing_code: (d) => `Writing to ${d ? d.split("/").pop() : "a file"}.`,
+  running_bash: () => "Running a command.",
+  searching: () => "Searching the codebase.",
+  error: () => "Hmm, something went wrong.",
+};
+
+const PROGRESS_COOLDOWN = 4000; // ms
 
 export default function App() {
   const [p, setP] = useState({ ...DEFAULT_PARAMS });
@@ -16,33 +38,276 @@ export default function App() {
   const [input, setInput] = useState("");
   const [sec, setSec] = useState(0);
   const [view, setView] = useState("chat"); // chat | term
+  const [claudeReady, setClaudeReady] = useState(false);
   const [transcript, setTranscript] = useState([]);
+  const [ttsReady, setTtsReady] = useState(null); // null=checking, true/false
+  const [ttsDownloading, setTtsDownloading] = useState(false);
+  const [ttsProgress, setTtsProgress] = useState({ label: "", pct: 0 });
+  const [sttReady, setSttReady] = useState(null); // null=checking, true/false
+  const [sttDownloading, setSttDownloading] = useState(false);
+  const [sttProgress, setSttProgress] = useState({ label: "", pct: 0 });
+  const [amplitude, setAmplitude] = useState(0);
+  const [peers, setPeers] = useState([]);
+  const [error, setError] = useState(null);
+  const [showSetup, setShowSetup] = useState(null); // null=checking, true/false
+  const [micDeviceId, setMicDeviceId] = useState(null);
   const inRef = useRef();
+  const queuedInputRef = useRef(null);
+  const lastProgressRef = useRef(0);
+  const ampTimerRef = useRef(null);
+  const pttRef = useRef(false); // push-to-talk state
+  const inputSourceRef = useRef("typed"); // "typed" | "voice"
 
   // TTS — controls Blocky speaking
   const tts = useSpeechSynthesis({
-    onStart: () => setActivity("speaking"),
-    onEnd: () => setActivity("idle"),
+    onStart: () => {
+      setActivity("speaking");
+      // Start polling amplitude from the ref
+      if (ampTimerRef.current) clearInterval(ampTimerRef.current);
+      ampTimerRef.current = setInterval(() => {
+        setAmplitude(tts.amplitude.current);
+      }, 33); // ~30fps
+    },
+    onEnd: () => {
+      setActivity("idle");
+      if (ampTimerRef.current) {
+        clearInterval(ampTimerRef.current);
+        ampTimerRef.current = null;
+      }
+      setAmplitude(0);
+    },
   });
 
-  // STT — voice input
-  const stt = useSpeechRecognition({
-    onResult: useCallback((text) => {
-      const t = text.trim();
-      if (!t) return;
+  // Check TTS readiness on mount + listen for download progress
+  useEffect(() => {
+    if (!window.blockyAPI?.checkTtsReady) {
+      setTtsReady(false);
+      return;
+    }
+    window.blockyAPI.checkTtsReady().then((r) => {
+      setTtsReady(r?.ready || false);
+    });
+    const unsub = window.blockyAPI.onTtsDownloadProgress?.((data) => {
+      setTtsProgress(data);
+      if (data.pct === 1) {
+        setTtsReady(true);
+        setTtsDownloading(false);
+        tts.refreshPiperStatus();
+      } else if (data.pct === -1) {
+        setTtsDownloading(false);
+      }
+    });
+    return unsub;
+  }, []);
 
-      // Try Blocky command first
-      const { c, u } = parseCommand(t);
-      if (Object.keys(c).length > 0) {
-        setP((prev) => ({ ...prev, ...c }));
-        return;
+  const handleTtsDownload = useCallback(() => {
+    setTtsDownloading(true);
+    window.blockyAPI?.downloadTts();
+  }, []);
+
+  // Check STT (Whisper) readiness on mount + listen for download progress
+  useEffect(() => {
+    if (!window.blockyAPI?.checkSttReady) {
+      setSttReady(false);
+      return;
+    }
+    window.blockyAPI.checkSttReady().then((r) => {
+      setSttReady(r?.ready || false);
+    });
+    const unsub = window.blockyAPI.onSttDownloadProgress?.((data) => {
+      setSttProgress(data);
+      if (data.pct === 1) {
+        setSttReady(true);
+        setSttDownloading(false);
+        stt.refreshWhisperStatus?.();
+      } else if (data.pct === -1) {
+        setSttDownloading(false);
+      }
+    });
+    return unsub;
+  }, []);
+
+  const handleSttDownload = useCallback(() => {
+    setSttDownloading(true);
+    window.blockyAPI?.downloadStt();
+  }, []);
+
+  // Helper — handle actions from command parser (mute/unmute)
+  const handleActions = useCallback(
+    (actions) => {
+      for (const action of actions) {
+        if (action === "mute" && !tts.isMuted) tts.toggleMute();
+        if (action === "unmute" && tts.isMuted) tts.toggleMute();
+      }
+    },
+    [tts.isMuted, tts.toggleMute],
+  );
+
+  // Helper — speak ack and log to transcript
+  const doAck = useCallback(() => {
+    const phrase = ACK_PHRASES[Math.floor(Math.random() * ACK_PHRASES.length)];
+    tts.speakAck(phrase);
+    setTranscript((prev) => [...prev, { type: "blocky_verbal", text: phrase }]);
+  }, [tts.speakAck]);
+
+  // STT — voice input (with echo prevention)
+  const stt = useSpeechRecognition({
+    onResult: useCallback(
+      (text) => {
+        const t = text.trim();
+        if (!t) return;
+
+        // Try Blocky command first
+        const { c, u, actions } = parseCommand(t);
+        if (Object.keys(c).length > 0 || (actions && actions.length > 0)) {
+          if (Object.keys(c).length > 0) setP((prev) => ({ ...prev, ...c }));
+          if (actions?.length > 0) handleActions(actions);
+          return;
+        }
+
+        // Otherwise send to Claude Code via PTY
+        inputSourceRef.current = "voice";
+        setTranscript((prev) => [...prev, { type: "user", text: t }]);
+        window.blockyAPI?.sendPtyInput(t + "\r");
+        doAck();
+      },
+      [doAck, handleActions],
+    ),
+    isTtsSpeaking: tts.isSpeaking,
+    micDeviceId,
+  });
+
+  // Peer discovery — listen for updates from other Blocky instances
+  useEffect(() => {
+    if (!window.blockyAPI?.onPeersUpdate) return;
+    const unsub = window.blockyAPI.onPeersUpdate((peerList) => {
+      setPeers(peerList);
+    });
+    return unsub;
+  }, []);
+
+  // Push own state to peer registry when it changes
+  useEffect(() => {
+    window.blockyAPI?.updatePeerState?.({
+      name: p.name,
+      skinColor: p.skinColor,
+      eyeStyle: p.eyeStyle,
+      mouthStyle: p.mouthStyle,
+      accessory: p.accessory,
+      activity,
+      detail,
+    });
+  }, [
+    p.name,
+    p.skinColor,
+    p.eyeStyle,
+    p.mouthStyle,
+    p.accessory,
+    activity,
+    detail,
+  ]);
+
+  // First-run check
+  useEffect(() => {
+    window.blockyAPI
+      ?.isFirstRun?.()
+      .then((first) => {
+        setShowSetup(first);
+      })
+      .catch(() => setShowSetup(false));
+  }, []);
+
+  // Transcript export helper
+  const exportTranscript = useCallback(() => {
+    if (transcript.length === 0) return;
+    const lines = [`# Blocky Session — ${new Date().toLocaleString()}`, ""];
+    for (const entry of transcript) {
+      if (entry.type === "user") lines.push(`**You:** ${entry.text}`, "");
+      else if (entry.type === "response")
+        lines.push(`**Blocky:** ${entry.text}`, "");
+      else if (entry.type === "blocky_verbal")
+        lines.push(`*${entry.text}*`, "");
+      else if (entry.type === "tool") {
+        const label = entry.activity?.toUpperCase() || "WORKING";
+        lines.push(`> ${label}${entry.detail ? ` · ${entry.detail}` : ""}`, "");
+      }
+    }
+    window.blockyAPI
+      ?.exportTranscript?.(lines.join("\n"))
+      .then((path) => {
+        if (path) setError(null); // clear any prior error
+      })
+      .catch(() => setError("Failed to export transcript"));
+  }, [transcript]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Don't intercept when typing in input
+      const inInput =
+        document.activeElement?.tagName === "INPUT" ||
+        document.activeElement?.tagName === "TEXTAREA";
+
+      // Space = push-to-talk (only when not typing)
+      if (
+        e.code === "Space" &&
+        !inInput &&
+        phase === "running" &&
+        !pttRef.current
+      ) {
+        e.preventDefault();
+        pttRef.current = true;
+        if (!stt.isListening && !stt.isTranscribing && stt.isSupported) {
+          tts.stop();
+          stt.start();
+        }
       }
 
-      // Otherwise send to Claude Code via PTY
-      setTranscript((prev) => [...prev, { type: "user", text: t }]);
-      window.blockyAPI?.sendPtyInput(t + "\r");
-    }, []),
-  });
+      // Escape = stop TTS/STT
+      if (e.key === "Escape") {
+        tts.stop();
+        if (stt.isListening) stt.stop();
+      }
+
+      // Ctrl+Shift+E = export transcript
+      if (e.ctrlKey && e.shiftKey && e.key === "E") {
+        e.preventDefault();
+        exportTranscript();
+      }
+
+      // Ctrl+1/2 = switch views
+      if (e.ctrlKey && e.key === "1") {
+        e.preventDefault();
+        setView("chat");
+      }
+      if (e.ctrlKey && e.key === "2") {
+        e.preventDefault();
+        setView("term");
+      }
+    };
+
+    const handleKeyUp = (e) => {
+      // Space release = stop push-to-talk
+      if (e.code === "Space" && pttRef.current) {
+        pttRef.current = false;
+        if (stt.isListening) stt.stop();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, [
+    phase,
+    stt.isListening,
+    stt.isTranscribing,
+    stt.isSupported,
+    tts,
+    exportTranscript,
+  ]);
 
   // Session timer
   useEffect(() => {
@@ -75,10 +340,32 @@ export default function App() {
         data.activity !== "thinking" &&
         data.activity !== "success"
       ) {
-        setTranscript((prev) => [
-          ...prev,
-          { type: "tool", activity: data.activity, detail: data.detail },
-        ]);
+        const isVoice = inputSourceRef.current === "voice";
+
+        // Only log tool entries to transcript for voice input
+        if (isVoice) {
+          setTranscript((prev) => [
+            ...prev,
+            { type: "tool", activity: data.activity, detail: data.detail },
+          ]);
+        }
+
+        // Verbal progress update with cooldown (voice only)
+        if (isVoice) {
+          const phraser = PROGRESS_PHRASES[data.activity];
+          if (phraser) {
+            const now = Date.now();
+            if (now - lastProgressRef.current >= PROGRESS_COOLDOWN) {
+              lastProgressRef.current = now;
+              const phrase = phraser(data.detail);
+              tts.speakProgress(phrase);
+              setTranscript((prev) => [
+                ...prev,
+                { type: "blocky_verbal", text: phrase },
+              ]);
+            }
+          }
+        }
       }
 
       // Claude's response (Stop hook)
@@ -92,15 +379,35 @@ export default function App() {
       }
     });
     return unsub;
-  }, [tts.speak]);
+  }, [tts.speak, tts.speakProgress]);
+
+  // Detect when Claude Code is ready by watching PTY output for the prompt
+  useEffect(() => {
+    if (!window.blockyAPI || phase !== "running") return;
+    const unsub = window.blockyAPI.onPtyData((data) => {
+      // Claude Code shows its prompt character when ready
+      if (!claudeReady && /[❯>]\s*$/.test(data)) {
+        setClaudeReady(true);
+        // Send queued input if any
+        if (queuedInputRef.current) {
+          window.blockyAPI.sendPtyInput(queuedInputRef.current);
+          queuedInputRef.current = null;
+        }
+      }
+    });
+    return unsub;
+  }, [phase, claudeReady]);
 
   // Listen for PTY exit
   useEffect(() => {
     if (!window.blockyAPI) return;
-    const unsub = window.blockyAPI.onPtyExit(() => {
+    const unsub = window.blockyAPI.onPtyExit((code) => {
       setPhase("exited");
       setActivity("idle");
       setDetail(null);
+      if (code && code !== 0) {
+        setError(`Claude Code exited with code ${code}`);
+      }
     });
     return unsub;
   }, []);
@@ -109,9 +416,13 @@ export default function App() {
     if (!window.blockyAPI) return;
     window.blockyAPI.startPty(dir);
     setPhase("running");
+    setClaudeReady(false);
     setActivity("idle");
     setSec(0);
     setTranscript([]);
+    // Push project info to peer registry
+    const projectName = dir.split(/[/\\]/).filter(Boolean).pop() || dir;
+    window.blockyAPI.updatePeerState?.({ project: dir, projectName });
   }, []);
 
   const handleRestart = useCallback(() => {
@@ -128,13 +439,20 @@ export default function App() {
     if (!t) return;
 
     // Try Blocky command first
-    const { c } = parseCommand(t);
-    if (Object.keys(c).length > 0) {
-      setP((prev) => ({ ...prev, ...c }));
+    const { c, actions } = parseCommand(t);
+    if (Object.keys(c).length > 0 || (actions && actions.length > 0)) {
+      if (Object.keys(c).length > 0) setP((prev) => ({ ...prev, ...c }));
+      if (actions?.length > 0) handleActions(actions);
     } else {
       // Send to Claude Code via PTY
+      inputSourceRef.current = "typed";
       setTranscript((prev) => [...prev, { type: "user", text: t }]);
-      window.blockyAPI?.sendPtyInput(t + "\r");
+      if (claudeReady) {
+        window.blockyAPI?.sendPtyInput(t + "\r");
+      } else {
+        // Queue input until Claude Code is ready
+        queuedInputRef.current = t + "\r";
+      }
     }
 
     setInput("");
@@ -142,9 +460,9 @@ export default function App() {
   };
 
   // Mic button handler
-  const handleMic = () => {
+  const handleMic = async () => {
     if (stt.isListening) {
-      stt.stop();
+      await stt.stop();
     } else {
       // Cancel TTS if Blocky is speaking
       tts.stop();
@@ -274,8 +592,14 @@ export default function App() {
         </div>
       </div>
 
+      {/* ─── ERROR BANNER ─── */}
+      <ErrorBanner error={error} onDismiss={() => setError(null)} />
+
+      {/* ─── SETUP WIZARD ─── */}
+      {showSetup && <SetupWizard onComplete={() => setShowSetup(false)} />}
+
       {/* ─── MAIN CONTENT ─── */}
-      {phase === "picking" && (
+      {!showSetup && phase === "picking" && (
         <>
           <div
             style={{
@@ -287,10 +611,165 @@ export default function App() {
               background: `radial-gradient(ellipse at 50% 40%, ${p.skinColor}08 0%, transparent 60%), radial-gradient(ellipse at center, #0c1612 0%, #080c0a 70%)`,
             }}
           >
-            <BlockyFace params={p} activity={activity} detail={detail} />
+            <BlockyFace
+              params={p}
+              activity={activity}
+              detail={detail}
+              amplitude={activity === "speaking" ? amplitude : undefined}
+            />
             <div style={{ marginTop: 10 }}>
               <Waveform active={false} color={p.skinColor} />
             </div>
+          </div>
+          {/* TTS download banner */}
+          {ttsReady === false && !ttsDownloading && (
+            <div
+              style={{
+                padding: "8px 16px",
+                background: "#0c1612",
+                borderBottom: "1px solid #12251c",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                fontSize: 9,
+                fontFamily: "'JetBrains Mono',monospace",
+              }}
+            >
+              <span style={{ color: "#4a6a5a" }}>
+                Download voice model (~35MB, one-time) for natural speech
+              </span>
+              <button
+                onClick={handleTtsDownload}
+                style={{
+                  padding: "4px 12px",
+                  borderRadius: 4,
+                  border: "1px solid #00ff8833",
+                  background: "#00ff880d",
+                  color: "#00ff88",
+                  cursor: "pointer",
+                  fontFamily: "'JetBrains Mono',monospace",
+                  fontSize: 8,
+                  fontWeight: 600,
+                  letterSpacing: 1,
+                }}
+              >
+                DOWNLOAD
+              </button>
+            </div>
+          )}
+          {ttsDownloading && (
+            <div
+              style={{
+                padding: "8px 16px",
+                background: "#0c1612",
+                borderBottom: "1px solid #12251c",
+                fontFamily: "'JetBrains Mono',monospace",
+                fontSize: 9,
+              }}
+            >
+              <div style={{ color: "#4a6a5a", marginBottom: 4 }}>
+                {ttsProgress.label || "Preparing..."}
+              </div>
+              <div
+                style={{
+                  height: 3,
+                  background: "#12251c",
+                  borderRadius: 2,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${Math.max(0, Math.min(100, ttsProgress.pct * 100))}%`,
+                    height: "100%",
+                    background: "#00ff88",
+                    borderRadius: 2,
+                    transition: "width 0.3s ease",
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          {/* STT download banner */}
+          {sttReady === false && !sttDownloading && (
+            <div
+              style={{
+                padding: "8px 16px",
+                background: "#0c1612",
+                borderBottom: "1px solid #12251c",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                fontSize: 9,
+                fontFamily: "'JetBrains Mono',monospace",
+              }}
+            >
+              <span style={{ color: "#4a6a5a" }}>
+                Download offline speech model (~150MB) for Whisper STT
+              </span>
+              <button
+                onClick={handleSttDownload}
+                style={{
+                  padding: "4px 12px",
+                  borderRadius: 4,
+                  border: "1px solid #5588ff33",
+                  background: "#5588ff0d",
+                  color: "#5588ff",
+                  cursor: "pointer",
+                  fontFamily: "'JetBrains Mono',monospace",
+                  fontSize: 8,
+                  fontWeight: 600,
+                  letterSpacing: 1,
+                }}
+              >
+                DOWNLOAD
+              </button>
+            </div>
+          )}
+          {sttDownloading && (
+            <div
+              style={{
+                padding: "8px 16px",
+                background: "#0c1612",
+                borderBottom: "1px solid #12251c",
+                fontFamily: "'JetBrains Mono',monospace",
+                fontSize: 9,
+              }}
+            >
+              <div style={{ color: "#4a6a5a", marginBottom: 4 }}>
+                {sttProgress.label || "Preparing..."}
+              </div>
+              <div
+                style={{
+                  height: 3,
+                  background: "#12251c",
+                  borderRadius: 2,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${Math.max(0, Math.min(100, sttProgress.pct * 100))}%`,
+                    height: "100%",
+                    background: "#5588ff",
+                    borderRadius: 2,
+                    transition: "width 0.3s ease",
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              padding: "0 30px",
+            }}
+          >
+            <AudioDevicePicker
+              micDeviceId={micDeviceId}
+              onMicChange={setMicDeviceId}
+            />
           </div>
           <ProjectPicker onSelect={handleSelectProject} />
         </>
@@ -315,6 +794,7 @@ export default function App() {
               activity={activity}
               detail={detail}
               compact
+              amplitude={activity === "speaking" ? amplitude : undefined}
             />
             <div style={{ width: "100%" }}>
               <Waveform
@@ -333,7 +813,14 @@ export default function App() {
               overflow: "hidden",
             }}
           >
-            <Transcript entries={transcript} />
+            <Transcript
+              entries={transcript}
+              activity={activity}
+              detail={detail}
+              skinColor={p.skinColor}
+              peers={peers}
+              claudeReady={claudeReady}
+            />
           </div>
 
           {/* Terminal (term view) — stays mounted */}
@@ -385,11 +872,13 @@ export default function App() {
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && submit()}
                   placeholder={
-                    stt.isListening
-                      ? "listening..."
-                      : "ask claude or blocky command..."
+                    stt.isTranscribing
+                      ? "transcribing..."
+                      : stt.isListening
+                        ? "listening..."
+                        : "ask claude or blocky command..."
                   }
-                  readOnly={stt.isListening}
+                  readOnly={stt.isListening || stt.isTranscribing}
                   style={{
                     flex: 1,
                     background: "none",
@@ -423,21 +912,35 @@ export default function App() {
               {stt.isSupported && (
                 <button
                   onClick={handleMic}
+                  disabled={stt.isTranscribing || tts.isSpeaking}
                   className={stt.isListening ? "mic-active" : ""}
                   style={{
                     padding: "7px 10px",
                     borderRadius: 6,
-                    border: `1px solid ${stt.isListening ? "#ff4444" : "#2a4a3a"}33`,
-                    background: stt.isListening ? "#ff44440d" : "#0a100e",
-                    color: stt.isListening ? "#ff4444" : "#2a4a3a",
-                    cursor: "pointer",
+                    border: `1px solid ${stt.isListening ? "#ff4444" : stt.isTranscribing ? "#ffaa00" : "#2a4a3a"}33`,
+                    background: stt.isListening
+                      ? "#ff44440d"
+                      : stt.isTranscribing
+                        ? "#ffaa000d"
+                        : "#0a100e",
+                    color: stt.isListening
+                      ? "#ff4444"
+                      : stt.isTranscribing
+                        ? "#ffaa00"
+                        : tts.isSpeaking
+                          ? "#1a2a1a"
+                          : "#2a4a3a",
+                    cursor:
+                      stt.isTranscribing || tts.isSpeaking
+                        ? "not-allowed"
+                        : "pointer",
                     fontFamily: "'JetBrains Mono',monospace",
                     fontSize: 9,
                     fontWeight: 600,
                     letterSpacing: 1,
                   }}
                 >
-                  MIC
+                  {stt.isTranscribing ? "..." : "MIC"}
                 </button>
               )}
               <button
@@ -457,6 +960,26 @@ export default function App() {
               >
                 {tts.isMuted ? "UNMUTE" : "MUTE"}
               </button>
+              {transcript.length > 0 && (
+                <button
+                  onClick={exportTranscript}
+                  title="Export transcript (Ctrl+Shift+E)"
+                  style={{
+                    padding: "7px 10px",
+                    borderRadius: 6,
+                    border: "1px solid #2a4a3a33",
+                    background: "#0a100e",
+                    color: "#2a4a3a",
+                    cursor: "pointer",
+                    fontFamily: "'JetBrains Mono',monospace",
+                    fontSize: 8,
+                    fontWeight: 600,
+                    letterSpacing: 1,
+                  }}
+                >
+                  SAVE
+                </button>
+              )}
             </div>
             <div
               style={{
@@ -471,10 +994,11 @@ export default function App() {
                 <button
                   key={cmd}
                   onClick={() => {
-                    const { c } = parseCommand(cmd);
+                    const { c, actions } = parseCommand(cmd);
                     if (Object.keys(c).length > 0) {
                       setP((prev) => ({ ...prev, ...c }));
                     }
+                    if (actions?.length > 0) handleActions(actions);
                   }}
                   style={{
                     padding: "2px 7px",
@@ -508,7 +1032,12 @@ export default function App() {
             gap: 20,
           }}
         >
-          <BlockyFace params={p} activity="idle" detail={null} />
+          <BlockyFace
+            params={p}
+            activity="idle"
+            detail={null}
+            amplitude={undefined}
+          />
           <div
             style={{
               fontSize: 11,

@@ -16,6 +16,18 @@ export function parseCommand(input) {
   const l = input.toLowerCase().trim();
   const c = {};
   const u = [];
+  const actions = [];
+
+  // Mute / unmute
+  if (l.match(/\b(unmute|un-mute)\b/)) {
+    actions.push("unmute");
+    u.push("unmuted");
+  } else if (
+    l.match(/\b(mute|shut up|be quiet|quiet|silence|shush|hush|stfu)\b/)
+  ) {
+    actions.push("mute");
+    u.push("muted");
+  }
   const colors = {
     red: "#ff4444",
     green: "#00ff88",
@@ -274,5 +286,5 @@ export function parseCommand(input) {
     u.push(`name → ${c.name}`);
   }
 
-  return { c, u };
+  return { c, u, actions };
 }

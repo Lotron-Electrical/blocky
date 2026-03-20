@@ -24,6 +24,41 @@ contextBridge.exposeInMainWorld("blockyAPI", {
     return () => ipcRenderer.removeListener("hook:activity", handler);
   },
 
+  // TTS (Piper)
+  checkTtsReady: () => ipcRenderer.invoke("tts:check-ready"),
+  downloadTts: () => ipcRenderer.invoke("tts:download"),
+  synthesize: (text) => ipcRenderer.invoke("tts:synthesize", text),
+  onTtsDownloadProgress: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on("tts:download-progress", handler);
+    return () => ipcRenderer.removeListener("tts:download-progress", handler);
+  },
+
+  // STT (Whisper)
+  checkSttReady: () => ipcRenderer.invoke("stt:check-ready"),
+  downloadStt: () => ipcRenderer.invoke("stt:download"),
+  transcribe: (wavArrayBuffer) =>
+    ipcRenderer.invoke("stt:transcribe", wavArrayBuffer),
+  onSttDownloadProgress: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on("stt:download-progress", handler);
+    return () => ipcRenderer.removeListener("stt:download-progress", handler);
+  },
+
+  // Peers
+  updatePeerState: (state) => ipcRenderer.send("peer:state", state),
+  onPeersUpdate: (callback) => {
+    const handler = (_event, peers) => callback(peers);
+    ipcRenderer.on("peers:update", handler);
+    return () => ipcRenderer.removeListener("peers:update", handler);
+  },
+
+  // App
+  isFirstRun: () => ipcRenderer.invoke("app:isFirstRun"),
+  completeSetup: () => ipcRenderer.invoke("app:completeSetup"),
+  exportTranscript: (markdown) =>
+    ipcRenderer.invoke("app:exportTranscript", markdown),
+
   // Dialog
   selectDirectory: () => ipcRenderer.invoke("dialog:selectDirectory"),
 
