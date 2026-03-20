@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import { join } from "path";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import {
-  spawnClaude,
+  spawnShell,
   write as ptyWrite,
   resize as ptyResize,
   kill as ptyKill,
@@ -57,7 +57,7 @@ function createWindow() {
 // ── IPC Handlers ──
 
 ipcMain.on("pty:start", (_event, projectDir) => {
-  spawnClaude(projectDir, win);
+  spawnShell(projectDir, win);
 });
 
 ipcMain.on("pty:input", (_event, data) => {
