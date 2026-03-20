@@ -13,7 +13,7 @@ function getShell() {
   return process.env.SHELL || "/bin/bash";
 }
 
-export function spawnShell(projectDir, browserWindow) {
+export function spawnClaude(projectDir, browserWindow) {
   win = browserWindow;
 
   if (ptyProcess) {
@@ -23,7 +23,7 @@ export function spawnShell(projectDir, browserWindow) {
 
   const shell = getShell();
   const isGitBash = shell.includes("bash");
-  const shellArgs = isGitBash ? ["-l"] : [];
+  const shellArgs = isGitBash ? ["-l", "-c", "claude"] : ["/c", "claude"];
   const cwd = projectDir || process.env.USERPROFILE || process.env.HOME;
 
   ptyProcess = pty.spawn(shell, shellArgs, {
@@ -51,7 +51,7 @@ export function spawnShell(projectDir, browserWindow) {
     ptyProcess = null;
   });
 
-  console.log(`[pty-manager] spawned shell in ${cwd} (pid: ${ptyProcess.pid})`);
+  console.log(`[pty-manager] spawned claude in ${cwd} (pid: ${ptyProcess.pid})`);
 }
 
 export function write(data) {

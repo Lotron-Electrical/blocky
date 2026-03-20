@@ -22,7 +22,7 @@ process.on("uncaughtException", (err) => {
   console.error("[main] uncaughtException:", err);
 });
 import {
-  spawnShell,
+  spawnClaude,
   write as ptyWrite,
   resize as ptyResize,
   kill as ptyKill,
@@ -77,7 +77,7 @@ function createWindow() {
 // ── IPC Handlers ──
 
 ipcMain.on("pty:start", (_event, projectDir) => {
-  spawnShell(projectDir, win);
+  spawnClaude(projectDir, win);
 });
 
 ipcMain.on("pty:input", (_event, data) => {
