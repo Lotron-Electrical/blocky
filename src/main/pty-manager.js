@@ -24,18 +24,27 @@ export function spawnShell(projectDir, browserWindow) {
   const shell = getShell();
   const isGitBash = shell.includes("bash");
   const shellArgs = isGitBash ? ["-l"] : [];
+  const cwd = projectDir || process.env.USERPROFILE || process.env.HOME;
 
-  ptyProcess = pty.spawn(shell, shellArgs, {
-    name: "xterm-256color",
-    cols: 80,
-    rows: 24,
-    cwd: projectDir || process.env.USERPROFILE || process.env.HOME,
-    env: {
-      ...process.env,
-      TERM: "xterm-256color",
-      BLOCKY_SESSION: "1",
-    },
-  });
+  try {
+    ptyProcess = pty.spawn(shell, shellArgs, {
+      name: "xterm-256color",
+      cols: 80,
+      rows: 24,
+      cwd,
+      env: {
+        ...process.env,
+        TERM: "xterm-256color",
+        BLOCKY_SESSION: "1",
+      },
+    });
+  } catch (err) {
+    console.error(`[pty-manager] spawn failed: ${err.message}`);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("pty:exit", 1);
+    }
+    return;
+  }
 
   ptyProcess.onData((data) => {
     if (win && !win.isDestroyed()) {
@@ -50,9 +59,7 @@ export function spawnShell(projectDir, browserWindow) {
     ptyProcess = null;
   });
 
-  console.log(
-    `[pty-manager] spawned shell in ${projectDir || "home"} (pid: ${ptyProcess.pid})`,
-  );
+  console.log(`[pty-manager] spawned shell in ${cwd} (pid: ${ptyProcess.pid})`);
 }
 
 export function write(data) {

@@ -1,6 +1,26 @@
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import { join } from "path";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  appendFileSync,
+} from "fs";
+
+// Log uncaught exceptions to file for debugging
+const logFile = join(
+  process.env.USERPROFILE || process.env.HOME,
+  ".blocky",
+  "crash.log",
+);
+process.on("uncaughtException", (err) => {
+  const msg = `[${new Date().toISOString()}] ${err.stack || err.message}\n`;
+  try {
+    appendFileSync(logFile, msg);
+  } catch {}
+  console.error("[main] uncaughtException:", err);
+});
 import {
   spawnShell,
   write as ptyWrite,
