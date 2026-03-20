@@ -421,7 +421,7 @@ export default function App() {
     setSec(0);
     setTranscript([]);
     // Push project info to peer registry
-    const projectName = dir.split(/[/\\]/).filter(Boolean).pop() || dir;
+    const projectName = dir ? dir.split(/[/\\]/).filter(Boolean).pop() : "Home";
     window.blockyAPI.updatePeerState?.({ project: dir, projectName });
   }, []);
 
