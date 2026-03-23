@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Animated ASCII avatar for Claude Code",
   "main": "dist-electron/main/index.js",
+  "bin": {
+    "blocky": "bin/blocky.js"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
