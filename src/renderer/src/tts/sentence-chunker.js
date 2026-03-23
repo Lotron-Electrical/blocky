@@ -95,44 +95,46 @@ export default class SentenceChunker {
 
   _tryEmit() {
     // Look for sentence boundaries: . ! ? followed by space or end
-    const match = this.buffer.match(/([.!?])\s/);
-    if (!match) {
-      // Check for long sentences — split at comma/semicolon after 200 chars
-      if (this.buffer.length > 200) {
-        const splitMatch = this.buffer.match(/^(.{100,}?[,;])\s/);
-        if (splitMatch) {
-          const sentence = this._clean(splitMatch[1]);
-          if (sentence) this.onSentence(sentence);
-          this.buffer = this.buffer.slice(splitMatch[0].length);
+    // Use a regex exec loop to skip abbreviations and decimals
+    const re = /([.!?])\s/g;
+    let match;
+    while ((match = re.exec(this.buffer)) !== null) {
+      const endPos = match.index + 1; // position after the punctuation
+      const candidate = this.buffer.slice(0, endPos);
+
+      // Check for abbreviation — word before the period
+      if (match[1] === ".") {
+        const wordBefore = candidate.match(/(\w+)\.$/);
+        if (wordBefore && ABBREVIATIONS.has(wordBefore[1].toLowerCase())) {
+          continue; // skip this match, try the next one
+        }
+        // Check for decimal number (e.g. 3.14)
+        if (
+          /\d\.\d/.test(
+            this.buffer.slice(Math.max(0, match.index - 1), match.index + 2),
+          )
+        ) {
+          continue; // skip decimals
         }
       }
-      return;
+
+      const sentence = this._clean(candidate);
+      if (sentence) {
+        this.onSentence(sentence);
+      }
+      this.buffer = this.buffer.slice(endPos + 1); // skip the trailing space
+      return; // emit one sentence at a time, re-check on next push
     }
 
-    const endPos = match.index + 1; // position after the punctuation
-    const candidate = this.buffer.slice(0, endPos);
-
-    // Check for abbreviation — word before the period
-    if (match[1] === ".") {
-      const wordBefore = candidate.match(/(\w+)\.$/);
-      if (wordBefore && ABBREVIATIONS.has(wordBefore[1].toLowerCase())) {
-        return; // don't split on abbreviation
-      }
-      // Check for decimal number (e.g. 3.14)
-      if (
-        /\d\.\d/.test(
-          this.buffer.slice(Math.max(0, match.index - 1), match.index + 2),
-        )
-      ) {
-        return;
+    // No valid sentence boundary found — check for long sentence splitting
+    if (this.buffer.length > 200) {
+      const splitMatch = this.buffer.match(/^(.{100,}?[,;])\s/);
+      if (splitMatch) {
+        const sentence = this._clean(splitMatch[1]);
+        if (sentence) this.onSentence(sentence);
+        this.buffer = this.buffer.slice(splitMatch[0].length);
       }
     }
-
-    const sentence = this._clean(candidate);
-    if (sentence) {
-      this.onSentence(sentence);
-    }
-    this.buffer = this.buffer.slice(endPos + 1); // skip the trailing space too
   }
 
   _clean(text) {

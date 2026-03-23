@@ -174,6 +174,7 @@ export function parseCommand(input) {
         animSpeed: 1,
       },
       u: ["ANGRY MODE"],
+      actions: [],
     };
   }
   if (l.includes("excited") || l.includes("hyped")) {
@@ -189,6 +190,7 @@ export function parseCommand(input) {
         animSpeed: 1.5,
       },
       u: ["EXCITED MODE"],
+      actions: [],
     };
   }
   if (l.includes("love") || l.includes("adorable")) {
@@ -204,6 +206,7 @@ export function parseCommand(input) {
         animSpeed: 0.8,
       },
       u: ["LOVE MODE"],
+      actions: [],
     };
   }
   if (l.includes("sleepy") || l.includes("tired")) {
@@ -215,6 +218,7 @@ export function parseCommand(input) {
         animSpeed: 0.5,
       },
       u: ["sleepy mode"],
+      actions: [],
     };
   }
   if (l.includes("confused") || l.includes("puzzled")) {
@@ -226,6 +230,7 @@ export function parseCommand(input) {
         animSpeed: 0.7,
       },
       u: ["confused mode"],
+      actions: [],
     };
   }
   if (l.includes("party") || l.includes("rave")) {
@@ -242,6 +247,7 @@ export function parseCommand(input) {
         glowColor: "#ff66aa44",
       },
       u: ["PARTY MODE"],
+      actions: [],
     };
   }
   if (l.includes("hacker") || l.includes("matrix")) {
@@ -257,6 +263,7 @@ export function parseCommand(input) {
         animSpeed: 0.6,
       },
       u: ["HACKER MODE"],
+      actions: [],
     };
   }
   if (l.includes("robot") || l.includes("mech")) {
@@ -273,10 +280,11 @@ export function parseCommand(input) {
         animSpeed: 0.5,
       },
       u: ["ROBOT MODE"],
+      actions: [],
     };
   }
   if (l.match(/reset|default|normal/)) {
-    return { c: { ...DEFAULT_PARAMS }, u: ["reset to defaults"] };
+    return { c: { ...DEFAULT_PARAMS }, u: ["reset to defaults"], actions: [] };
   }
   const nameMatch = l.match(
     /(?:call (?:you|yourself|blocky|him|her|it)|rename|name is|you(?:'re| are)) (.+)/,

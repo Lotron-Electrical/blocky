@@ -309,11 +309,12 @@ export default function App() {
     exportTranscript,
   ]);
 
-  // Session timer
+  // Session timer — only counts while running
   useEffect(() => {
+    if (phase !== "running") return;
     const t = setInterval(() => setSec((s) => s + 1), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [phase]);
 
   // Listen for hook activity events → drive transcript + TTS
   useEffect(() => {

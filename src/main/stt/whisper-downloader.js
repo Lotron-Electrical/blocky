@@ -1,7 +1,13 @@
-import { existsSync, mkdirSync, createWriteStream, unlinkSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  unlinkSync,
+  readdirSync,
+  renameSync,
+  statSync,
+} from "fs";
 import { join } from "path";
-import { get } from "https";
-import { exec } from "child_process";
+import { downloadFile, extractZip } from "../download-utils";
 
 const WHISPER_DIR = join(
   process.env.USERPROFILE || process.env.HOME,
@@ -26,59 +32,6 @@ function ensureDir() {
 
 function isReady() {
   return existsSync(WHISPER_EXE) && existsSync(MODEL_FILE);
-}
-
-function downloadFile(url, dest, onProgress, label) {
-  return new Promise((resolve, reject) => {
-    const follow = (url) => {
-      get(url, (res) => {
-        if (
-          res.statusCode >= 300 &&
-          res.statusCode < 400 &&
-          res.headers.location
-        ) {
-          follow(res.headers.location);
-          return;
-        }
-        if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode} downloading ${label}`));
-          return;
-        }
-
-        const total = parseInt(res.headers["content-length"] || "0", 10);
-        let downloaded = 0;
-        const file = createWriteStream(dest);
-
-        res.on("data", (chunk) => {
-          downloaded += chunk.length;
-          file.write(chunk);
-          if (total > 0) {
-            onProgress(label, downloaded / total);
-          }
-        });
-
-        res.on("end", () => {
-          file.end(() => resolve());
-        });
-
-        res.on("error", (err) => {
-          file.close();
-          reject(err);
-        });
-      }).on("error", reject);
-    };
-    follow(url);
-  });
-}
-
-function extractZip(zipPath, destDir) {
-  return new Promise((resolve, reject) => {
-    const cmd = `powershell -NoProfile -Command "Expand-Archive -Path '${zipPath.replace(/'/g, "''")}' -DestinationPath '${destDir.replace(/'/g, "''")}' -Force"`;
-    exec(cmd, { timeout: 60000 }, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
 }
 
 export function getWhisperPaths() {
@@ -120,7 +73,6 @@ export async function download(win) {
       await extractZip(zipPath, WHISPER_DIR);
 
       // whisper.cpp extracts to a subfolder — move main.exe up if needed
-      const { readdirSync, renameSync, statSync } = await import("fs");
       const entries = readdirSync(WHISPER_DIR);
       for (const entry of entries) {
         const entryPath = join(WHISPER_DIR, entry);

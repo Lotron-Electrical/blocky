@@ -12,7 +12,7 @@ export default function ErrorBanner({ error, onDismiss }) {
       }, 6000);
       return () => clearTimeout(timer);
     }
-  }, [error]);
+  }, [error, onDismiss]);
 
   if (!error) return null;
 

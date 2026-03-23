@@ -72,11 +72,24 @@ export function start(browserWindow) {
     mkdirSync(BLOCKY_DIR, { recursive: true });
   }
 
+  const MAX_BODY = 1024 * 1024; // 1MB limit
+
   server = http.createServer((req, res) => {
     if (req.method === "POST" && req.url === "/hook") {
       let body = "";
-      req.on("data", (chunk) => (body += chunk));
+      let truncated = false;
+      req.on("data", (chunk) => {
+        if (truncated) return;
+        body += chunk;
+        if (body.length > MAX_BODY) {
+          truncated = true;
+          res.writeHead(413);
+          res.end("body too large");
+          req.destroy();
+        }
+      });
       req.on("end", () => {
+        if (truncated) return;
         res.writeHead(200);
         res.end("ok");
         try {

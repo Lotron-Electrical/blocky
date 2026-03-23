@@ -51,7 +51,9 @@ export function spawnClaude(projectDir, browserWindow) {
     ptyProcess = null;
   });
 
-  console.log(`[pty-manager] spawned claude in ${cwd} (pid: ${ptyProcess.pid})`);
+  console.log(
+    `[pty-manager] spawned claude in ${cwd} (pid: ${ptyProcess.pid})`,
+  );
 }
 
 export function write(data) {

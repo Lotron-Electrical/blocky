@@ -148,14 +148,17 @@ export default function BlockyFace({
   const [speakF, setSpeakF] = useState(0);
 
   useEffect(() => {
-    const iv = setInterval(
-      () => {
+    let timer;
+    const scheduleBlink = () => {
+      const delay = params.blinkRate + Math.random() * 1500;
+      timer = setTimeout(() => {
         setBlink(true);
         setTimeout(() => setBlink(false), 110);
-      },
-      params.blinkRate + Math.random() * 1500,
-    );
-    return () => clearInterval(iv);
+        scheduleBlink();
+      }, delay);
+    };
+    scheduleBlink();
+    return () => clearTimeout(timer);
   }, [params.blinkRate]);
 
   useEffect(() => {
